@@ -12,7 +12,8 @@ use camera::Camera;
 use egui::{Align, CentralPanel, Frame, Layout, Ui};
 use egui::{Panel, Rect};
 use egui_dock::{DockArea, DockState, NodeIndex, Style as DockStyle};
-use event::Event;
+use event::{Event, MouseButton};
+use glam::Vec2;
 use light::Light;
 use settings::Settings;
 use state::ControllerState;
@@ -22,7 +23,7 @@ use winit::dpi::PhysicalSize;
 
 use crate::controller::widgets::controls::ControlsWidget;
 use crate::controller::widgets::{
-    crop::CropWidget, masks::MasksWidget, rendering::RenderingWidget,
+    crop::CropWidget, masks::MasksWidget, rendering::RenderingWidget, resection::ResectionWidget,
     tractography::TractographyWidget, volumes::VolumesWidget,
 };
 use crate::{asset::Asset, file::FileStage, gpu::warmup, surface::accumulate::AccumulationStatus};
@@ -35,6 +36,7 @@ enum Tab {
     Masks,
     Tractography,
     Rendering,
+    Resection,
     Controls,
     Debug,
 }
@@ -47,6 +49,7 @@ impl Tab {
             Tab::Masks => (icons::regular::CIRCLE_HALF, "Masks"),
             Tab::Tractography => (icons::regular::PATH, "Tractography"),
             Tab::Rendering => (icons::regular::LIGHTBULB, "Rendering"),
+            Tab::Resection => (icons::regular::ERASER, "Resection"),
             Tab::Controls => (icons::regular::MOUSE, "Controls"),
             Tab::Debug => (icons::regular::BUG, "Debug"),
         }
@@ -54,7 +57,7 @@ impl Tab {
 }
 
 fn default_dock_state() -> DockState<Tab> {
-    let mut tabs = vec![Tab::Slicing, Tab::Rendering];
+    let mut tabs = vec![Tab::Slicing, Tab::Rendering, Tab::Resection];
     if cfg!(debug_assertions) {
         tabs.push(Tab::Debug);
     }
@@ -86,6 +89,7 @@ struct ControllerTabViewer<'a> {
     tractography_widget: &'a mut TractographyWidget,
     crop_widget: &'a mut CropWidget,
     rendering_widget: &'a mut RenderingWidget,
+    resection_widget: &'a mut ResectionWidget,
     controls_widget: &'a mut ControlsWidget,
     hdr_headroom_limit: Option<f32>,
     accumulation: AccumulationStatus,
@@ -141,6 +145,9 @@ impl egui_dock::TabViewer for ControllerTabViewer<'_> {
                     self.hdr_headroom_limit,
                 );
             }
+            Tab::Resection => {
+                self.resection_widget.show(ui, &self.asset.volumes);
+            }
             Tab::Controls => {
                 self.controls_widget.show(ui);
             }
@@ -168,12 +175,14 @@ pub struct Controller {
     tractography_widget: TractographyWidget,
     crop_widget: CropWidget,
     rendering_widget: RenderingWidget,
+    resection_widget: ResectionWidget,
     controls_widget: ControlsWidget,
 
     dock_state: DockState<Tab>,
 
     viewport: Rect,
     hovered: bool,
+    resection_click: Option<Vec2>,
 }
 
 impl Default for Controller {
@@ -196,12 +205,14 @@ impl Controller {
             tractography_widget: TractographyWidget::new(),
             crop_widget: CropWidget::new(),
             rendering_widget: RenderingWidget::new(),
+            resection_widget: ResectionWidget::new(),
             controls_widget: ControlsWidget::new(),
 
             dock_state: default_dock_state(),
 
             viewport: Rect::ZERO,
             hovered: true,
+            resection_click: None,
         }
     }
 
@@ -233,6 +244,14 @@ impl Controller {
         &self.rendering_widget
     }
 
+    pub fn resection(&self) -> &ResectionWidget {
+        &self.resection_widget
+    }
+
+    pub fn take_resection_click(&mut self) -> Option<Vec2> {
+        self.resection_click.take()
+    }
+
     /// Bring the tab responsible for a data kind to the front. Called from
     /// `Asset::update` right after new files of that kind are loaded, so the
     /// dock tab system mirrors the old collapsing-header behaviour where
@@ -260,9 +279,30 @@ impl Controller {
     }
 
     pub fn event(&mut self, event: Event) {
+        let left_clicked = matches!(event, Event::MousePressed(MouseButton::Left));
         self.state = self.state.update(event);
 
-        self.camera.update(&self.state);
+        if self.resection_widget.enabled()
+            && self.hovered
+            && left_clicked
+            && self.viewport.width() > 0.0
+            && self.viewport.height() > 0.0
+        {
+            let pos = self.state.position;
+            let ndc = Vec2::new(
+                ((pos.x - self.viewport.min.x) / self.viewport.width()) * 2.0 - 1.0,
+                1.0 - ((pos.y - self.viewport.min.y) / self.viewport.height()) * 2.0,
+            );
+            if ndc.x.abs() <= 1.0 && ndc.y.abs() <= 1.0 {
+                self.resection_click = Some(ndc);
+            }
+        }
+
+        let mut camera_state = self.state;
+        if self.resection_widget.enabled() {
+            camera_state.left = false;
+        }
+        self.camera.update(&camera_state);
         self.light.update(&self.state);
     }
 
@@ -350,6 +390,7 @@ impl Controller {
                     tractography_widget: &mut self.tractography_widget,
                     crop_widget: &mut self.crop_widget,
                     rendering_widget: &mut self.rendering_widget,
+                    resection_widget: &mut self.resection_widget,
                     controls_widget: &mut self.controls_widget,
                     hdr_headroom_limit,
                     accumulation,

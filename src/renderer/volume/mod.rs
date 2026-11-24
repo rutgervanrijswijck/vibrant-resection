@@ -1,6 +1,7 @@
 pub mod render;
 pub mod transfer;
 
+use glam::{UVec3, Vec2};
 use wgpu::CommandEncoder;
 
 use crate::{
@@ -45,5 +46,29 @@ impl VolumeRenderer {
         }
 
         self.render.dispatch(gpu, cmd, asset, controller, frame);
+    }
+
+    pub fn pick(
+        &self,
+        gpu: &Gpu,
+        cmd: &mut CommandEncoder,
+        controller: &Controller,
+        asset: &Asset,
+        frame: &Frame,
+        ndc: Vec2,
+    ) -> Option<u64> {
+        self.render.pick(gpu, cmd, asset, controller, frame, ndc)
+    }
+
+    pub fn read_pick(&self, gpu: &Gpu, volume_id: u64) {
+        self.render.read_pick(gpu, volume_id);
+    }
+
+    pub fn take_pick(&self) -> Option<(u64, UVec3)> {
+        self.render.take_pick()
+    }
+
+    pub fn pick_pending(&self) -> bool {
+        self.render.pick_pending()
     }
 }

@@ -57,6 +57,16 @@ impl<T: Copy + 'static> Readback<T> {
         self.value.get()
     }
 
+    /// Takes the most recently completed value, if any, clearing it.
+    pub fn take(&self) -> Option<T> {
+        self.value.take()
+    }
+
+    /// Whether a readback is currently in flight.
+    pub fn pending(&self) -> bool {
+        self.pending.get()
+    }
+
     /// Starts a new readback if none is already in flight.
     ///
     /// `task` may still be running when this returns (always true on web,

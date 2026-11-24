@@ -77,6 +77,10 @@ impl Renderer {
         window: &Arc<Window>,
         controller: &mut Controller,
     ) -> RenderOutcome {
+        if let Some((volume_id, voxel)) = self.volume.take_pick() {
+            self.asset.add_resection_voxel(gpu, volume_id, voxel);
+        }
+
         self.surface.maybe_reconfigure(gpu, controller.settings());
 
         let repaint_after = self.ui.run(gpu, window, |ui| {
@@ -177,6 +181,10 @@ impl Renderer {
                 }
             }
 
+            let pick_volume = controller
+                .take_resection_click()
+                .and_then(|ndc| self.volume.pick(gpu, &mut cmd, controller, &self.asset, frame, ndc));
+
             // Fold the fresh sample into the running mean (when accumulating)
             // and hand back the buffer the present/export passes tone map.
             let scene = self
@@ -199,6 +207,10 @@ impl Renderer {
 
             self.surface.present(gpu, cmd, scene);
 
+            if let Some(volume_id) = pick_volume {
+                self.volume.read_pick(gpu, volume_id);
+            }
+
             if let Some(path) = save_path {
                 let gpu = gpu.clone();
                 let texture = frame.export().texture().clone();
@@ -216,7 +228,7 @@ impl Renderer {
 
         RenderOutcome {
             accumulating: self.surface.accumulating(&settings),
-            loading: FileStage::loading() || warmup::pending(),
+            loading: FileStage::loading() || warmup::pending() || self.volume.pick_pending(),
             repaint_after,
         }
     }

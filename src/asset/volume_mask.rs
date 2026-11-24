@@ -1,6 +1,8 @@
 use std::any::type_name;
 
 use bytemuck::{bytes_of, checked::cast_slice};
+use glam::UVec3;
+use half::f16;
 use wgpu::{util::DeviceExt, wgt::TextureDataOrder, *};
 
 use crate::{file::VolumeFile, gpu::Gpu};
@@ -74,6 +76,70 @@ impl VolumeMaskBuffer {
 
     pub fn settings(&self) -> &VolumeMaskSettings {
         &self.settings
+    }
+
+    /// Creates a zero-initialized binary resection mask with `inverted: true`,
+    /// so voxels added to the mask (`1.0`) are hidden from the rendered volume.
+    pub fn empty(gpu: &Gpu, name: String, size: UVec3) -> Self {
+        let texture = gpu.device().create_texture(&TextureDescriptor {
+            label: Some(type_name::<Self>()),
+            size: Extent3d {
+                width: size.x,
+                height: size.y,
+                depth_or_array_layers: size.z,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D3,
+            format: TextureFormat::R16Float,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let settings = VolumeMaskSettings {
+            name,
+            visible: true,
+            offset: 0.0,
+            width: 0.02,
+            inverted: true,
+            sdf: false,
+        };
+
+        Self::from_texture_settings(texture, settings)
+    }
+
+    /// Updates a single voxel in the 3D mask texture on the GPU.
+    pub fn set_voxel(&self, gpu: &Gpu, voxel: UVec3, value: f32) {
+        let size = self.texture.size();
+        if voxel.x >= size.width || voxel.y >= size.height || voxel.z >= size.depth_or_array_layers
+        {
+            return;
+        }
+
+        let half = f16::from_f32(value);
+        gpu.queue().write_texture(
+            TexelCopyTextureInfo {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: Origin3d {
+                    x: voxel.x,
+                    y: voxel.y,
+                    z: voxel.z,
+                },
+                aspect: TextureAspect::All,
+            },
+            bytes_of(&half),
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: None,
+                rows_per_image: None,
+            },
+            Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     pub fn none(gpu: &Gpu) -> VolumeMaskBuffer {

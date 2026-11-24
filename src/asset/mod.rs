@@ -65,6 +65,7 @@ pub struct Asset {
     cascade_key: Option<(bool, bool, RenderMode, u32)>,
 
     pub changed: bool,
+    pending_change: bool,
 }
 
 impl Asset {
@@ -87,11 +88,12 @@ impl Asset {
             physical_key: None,
             cascade_key: None,
             changed: false,
+            pending_change: false,
         }
     }
 
     pub fn update(&mut self, gpu: &Gpu, controller: &mut Controller) {
-        self.changed = false;
+        self.changed = std::mem::take(&mut self.pending_change);
 
         let had_pending = FileStage::has_pending();
 
@@ -319,6 +321,29 @@ impl Asset {
 
         self.cascade_key = cascade_key;
         self.changed = true;
+    }
+
+    /// Adds `voxel` to the resection mask for the volume with `volume_id`,
+    /// creating and attaching the mask on first use.
+    pub fn add_resection_voxel(&mut self, gpu: &Gpu, volume_id: u64, voxel: UVec3) {
+        let Some(volume) = self.volumes.iter_mut().find(|v| v.settings().id == volume_id) else {
+            return;
+        };
+
+        let mask_name = format!("Resection ({})", volume.settings().name);
+        let mask_index = match self.masks.iter().position(|m| m.settings().name == mask_name) {
+            Some(index) => index,
+            None => {
+                let mask = VolumeMaskBuffer::empty(gpu, mask_name, volume.size());
+                self.masks.push(mask);
+                self.masks.len() - 1
+            }
+        };
+
+        self.masks[mask_index].set_voxel(gpu, voxel, 1.0);
+        volume.settings_mut().mask = mask_index;
+        volume.settings_mut().masked = true;
+        self.pending_change = true;
     }
 
     pub fn changed(&self) -> bool {
