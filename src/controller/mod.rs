@@ -12,7 +12,8 @@ use camera::Camera;
 use egui::{Align, CentralPanel, Frame, Layout, Ui};
 use egui::{Panel, Rect};
 use egui_dock::{DockArea, DockState, NodeIndex, Style as DockStyle};
-use event::Event;
+use event::{Event, MouseButton};
+use glam::Vec2;
 use light::Light;
 use settings::Settings;
 use state::ControllerState;
@@ -174,6 +175,10 @@ pub struct Controller {
 
     viewport: Rect,
     hovered: bool,
+
+    resect_mode: bool,
+    pending_resect: Option<Vec2>,
+    pending_reset_resection: bool,
 }
 
 impl Default for Controller {
@@ -202,6 +207,10 @@ impl Controller {
 
             viewport: Rect::ZERO,
             hovered: true,
+
+            resect_mode: false,
+            pending_resect: None,
+            pending_reset_resection: false,
         }
     }
 
@@ -260,10 +269,33 @@ impl Controller {
     }
 
     pub fn event(&mut self, event: Event) {
+        let is_left_press = matches!(event, Event::MousePressed(MouseButton::Left));
         self.state = self.state.update(event);
 
-        self.camera.update(&self.state);
+        if self.resect_mode && is_left_press && self.hovered && !self.state.shift {
+            self.pending_resect = Some(self.state.position);
+        }
+
+        if self.resect_mode {
+            let mut cam_state = self.state;
+            cam_state.left = false;
+            self.camera.update(&cam_state);
+        } else {
+            self.camera.update(&self.state);
+        }
         self.light.update(&self.state);
+    }
+
+    pub fn resect_mode(&self) -> bool {
+        self.resect_mode
+    }
+
+    pub fn take_resect_click(&mut self) -> Option<Vec2> {
+        self.pending_resect.take()
+    }
+
+    pub fn take_reset_resection(&mut self) -> bool {
+        std::mem::replace(&mut self.pending_reset_resection, false)
     }
 
     pub fn ui(
@@ -315,6 +347,34 @@ impl Controller {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(
                         "https://github.com/as-the-crow-flies/vibrant",
                     ));
+                }
+
+                ui.separator();
+
+                if ui
+                    .selectable_label(
+                        self.resect_mode,
+                        format!("{} Resect", icons::regular::ERASER),
+                    )
+                    .on_hover_text(
+                        "Resection tool: left-click on the brain to remove a small sphere of \
+                         tissue. Right-drag still pans and scroll zooms.",
+                    )
+                    .clicked()
+                {
+                    self.resect_mode = !self.resect_mode;
+                }
+
+                let removed_total: usize = asset.volumes.iter().map(|v| v.removed_count()).sum();
+                if removed_total > 0 {
+                    if ui
+                        .button(format!("{} Reset", icons::regular::ARROW_COUNTER_CLOCKWISE))
+                        .on_hover_text("Restore all removed voxels.")
+                        .clicked()
+                    {
+                        self.pending_reset_resection = true;
+                    }
+                    ui.weak(format!("{removed_total} voxels removed"));
                 }
 
                 ui.take_available_width();
@@ -381,6 +441,9 @@ impl Controller {
         });
 
         self.hovered = viewport.response.hovered();
+        if self.resect_mode && self.hovered {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
         self.viewport = viewport.response.rect * scale;
         self.camera.set_aspect(self.viewport.aspect_ratio());
     }

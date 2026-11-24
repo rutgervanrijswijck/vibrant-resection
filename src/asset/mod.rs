@@ -6,6 +6,7 @@ pub mod line;
 pub mod material;
 pub mod noise;
 pub mod radiance;
+pub mod resection;
 pub mod texture;
 pub mod tractography;
 pub mod volume;
@@ -195,6 +196,50 @@ impl Asset {
         }
         for volume in &self.volumes {
             volume.update_settings(gpu);
+        }
+
+        if controller.take_reset_resection() {
+            for volume in &mut self.volumes {
+                if volume.reset_resection(gpu) {
+                    self.changed = true;
+                }
+            }
+        }
+
+        if let Some(click_px) = controller.take_resect_click() {
+            let viewport = controller.viewport();
+            let camera = controller.camera();
+            let crop = *self.crop.settings();
+
+            let mut closest: Option<(f32, glam::Vec3)> = None;
+            for volume in self.volumes.iter().filter(|v| v.settings().visible) {
+                if let Some((origin, direction)) =
+                    resection::ray_in_volume_uv(click_px, viewport, camera, volume.transform())
+                {
+                    if let Some((t_mm, hit_uv)) =
+                        resection::raycast_volume(volume, origin, direction, &crop)
+                    {
+                        if closest.map_or(true, |(best_t, _)| t_mm < best_t) {
+                            let hit_world = volume.transform().inverse().transform_point3(hit_uv);
+                            closest = Some((t_mm, hit_world));
+                        }
+                    }
+                }
+            }
+
+            if let Some((_, hit_world)) = closest {
+                let mut removed_any = false;
+                for volume in self.volumes.iter_mut().filter(|v| v.settings().visible) {
+                    let center_uv = volume.transform().transform_point3(hit_world);
+                    if volume.resect_sphere(gpu, center_uv, resection::DEFAULT_BRUSH_RADIUS_MM) > 0
+                    {
+                        removed_any = true;
+                    }
+                }
+                if removed_any {
+                    self.changed = true;
+                }
+            }
         }
 
         // Rebuild the tractography acceleration structure when the voxel
